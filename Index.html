@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Принцип Ле Шателье — симулятор</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#eef1f4;--card:#fff;--text:#14202b;--muted:#5d6b78;--line:#d5dce3;--n:#2563c9;--h:#e0a21a;--a:#c2338f;--btn:#e6ebf0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f151b;--card:#18212a;--text:#e6edf3;--muted:#8b98a5;--line:#2a3642;--n:#5b9bff;--h:#f0b429;--a:#e56bb8;--btn:#243140}}
+:root[data-theme="dark"]{--bg:#0f151b;--card:#18212a;--text:#e6edf3;--muted:#8b98a5;--line:#2a3642;--n:#5b9bff;--h:#f0b429;--a:#e56bb8;--btn:#243140}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px 14px 28px}
+h1{font-size:22px;margin:4px 0 2px;letter-spacing:-.01em}
+.sub{margin:0 0 12px;color:var(--muted);font-size:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+canvas{display:block}
+.leg{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;margin-top:8px;color:var(--muted);font-size:14px}
+.leg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+.leg b{margin-left:auto;color:var(--text);font-size:16px}
+label{display:flex;justify-content:space-between;margin:6px 0 2px}
+input[type=range]{width:100%;margin:0 0 8px;accent-color:var(--n)}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px}
+button{font:inherit;font-size:14px;padding:10px 6px;border:1px solid var(--line);border-radius:8px;background:var(--btn);color:var(--text);cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--n);outline-offset:2px}
+button.on{background:var(--n);color:#fff;border-color:var(--n)}
+.hint{padding:12px 14px;border-left:4px solid var(--a);background:var(--card);border-radius:0 12px 12px 0;min-height:64px}
+</style>
+</head>
+<body>
+<main>
+<h1>Принцип Ле Шателье</h1>
+<p class="sub">N₂ + 3H₂ ⇌ 2NH₃ + тепло</p>
+
+<section class="card">
+<canvas id="box"></canvas>
+<div class="leg"><span><i style="background:var(--n)"></i>N₂</span><span><i style="background:var(--h)"></i>H₂</span><span><i style="background:var(--a)"></i>NH₃</span><b id="yld"></b></div>
+</section>
+
+<section class="card">
+<canvas id="chart"></canvas>
+<div class="leg">Концентрации во времени</div>
+</section>
+
+<section class="card">
+<label for="T"><span>Температура</span><b id="tv">500 K</b></label>
+<input type="range" id="T" min="350" max="700" step="10" value="500">
+<label for="Pr"><span>Давление (поршень)</span><b id="pv">4 атм</b></label>
+<input type="range" id="Pr" min="2" max="10" step="0.5" value="4">
+<div class="btns">
+<button id="cat">Катализатор: выкл</button>
+<button id="addN">+ N₂</button>
+<button id="addH">+ H₂</button>
+<button id="remA">− NH₃</button>
+<button id="pause">Пауза</button>
+<button id="rst">Сброс</button>
+</div>
+</section>
+
+<div class="hint" id="hint">Меняйте температуру и давление, добавляйте или убирайте вещества — и смотрите, куда сместится равновесие.</div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('box'),cx=cv.getContext('2d'),ch=$('chart'),cc=ch.getContext('2d');
+const PAD=6,PT=10,BHT=200,CHT=130,HN=400;
+const MF=[1,1.6,1.15],RAD=[5,3,4.5],COL=['--n','--h','--a'];
+let P=[],T=500,Pr=4,cat=false,paused=false,hist=[],CVW=320,acc=0;
+
+function fit(){
+  const d=Math.min(window.devicePixelRatio||1,2);
+  CVW=cv.parentElement.clientWidth-24;
+  [[cv,BHT],[ch,CHT]].forEach(([c,h])=>{
+    c.width=CVW*d;c.height=h*d;c.style.width=CVW+'px';c.style.height=h+'px';
+    c.getContext('2d').setTransform(d,0,0,d,0,0);
+  });
+}
+const vol=()=>100/Pr;
+const boxW=()=>(CVW-2*PAD-PT)*Math.min(1,vol()/50);
+const boxH=()=>BHT-2*PAD;
+
+function spawn(t,x,y){
+  const a=Math.random()*6.283;
+  P.push({t,x,y,dx:Math.cos(a),dy:Math.sin(a),s:.6+Math.random()*.8});
+}
+function spawnRand(t){const r=RAD[t];spawn(t,r+Math.random()*(boxW()-2*r),r+Math.random()*(boxH()-2*r));}
+function reset(){
+  P=[];hist=[];
+  for(let i=0;i<20;i++)spawnRand(0);
+  for(let i=0;i<60;i++)spawnRand(1);
+}
+
+function rates(){
+  const o=cat?1000:0;
+  return [0.5*Math.exp(-(2000-o)/T),29.4*Math.exp(-(4000-o)/T)];
+}
+
+function step(dt){
+  const bw=boxW(),bh=boxH(),v=70*Math.sqrt(T/500);
+  for(const p of P){
+    const r=RAD[p.t],sp=v*p.s*MF[p.t]*dt;
+    p.x+=p.dx*sp;p.y+=p.dy*sp;
+    if(p.x<r){p.x=r;p.dx=Math.abs(p.dx)}else if(p.x>bw-r){p.x=bw-r;p.dx=-Math.abs(p.dx)}
+    if(p.y<r){p.y=r;p.dy=Math.abs(p.dy)}else if(p.y>bh-r){p.y=bh-r;p.dy=-Math.abs(p.dy)}
+  }
+  const I=[[],[],[]];
+  P.forEach((p,i)=>I[p.t].push(i));
+  const V=vol(),[kf,kr]=rates();
+  const cN=I[0].length/V,cH=I[1].length/V,cA=I[2].length/V;
+  const draw=e=>{let n=Math.floor(e);if(Math.random()<e-n)n++;return n};
+  let nf=Math.min(draw(kf*cN*cH**3*V*dt),I[0].length,Math.floor(I[1].length/3));
+  let nr=Math.min(draw(kr*cA*cA*V*dt),Math.floor(I[2].length/2));
+  const pick=a=>a.splice(Math.random()*a.length|0,1)[0];
+  const del=new Set();
+  while(nf-->0){
+    const n=pick(I[0]),h1=pick(I[1]),h2=pick(I[1]),h3=pick(I[1]);
+    P[n].t=2;P[h1].t=2;del.add(h2);del.add(h3);
+  }
+  while(nr-->0){
+    const a=pick(I[2]),b=pick(I[2]);
+    P[a].t=0;P[b].t=1;
+    spawn(1,P[b].x,P[b].y);spawn(1,P[b].x,P[b].y);
+  }
+  if(del.size)P=P.filter((_,i)=>!del.has(i));
+}
+
+function counts(){const c=[0,0,0];P.forEach(p=>c[p.t]++);return c}
+
+function sample(){
+  const c=counts(),V=vol();
+  hist.push([c[0]/V,c[1]/V,c[2]/V]);
+  if(hist.length>HN)hist.shift();
+  const tot=c[0]+c[1]+c[2];
+  $('yld').textContent='NH₃ в смеси: '+(tot?Math.round(100*c[2]/tot):0)+'%';
+}
+
+function drawBox(g){
+  const bw=boxW(),bh=boxH(),f=(T-350)/350;
+  cx.clearRect(0,0,CVW,BHT);
+  cx.save();cx.translate(PAD,PAD);
+  cx.fillStyle=`rgba(${Math.round(50+190*f)},${Math.round(130-50*f)},${Math.round(230-190*f)},0.16)`;
+  cx.fillRect(0,0,bw,bh);
+  cx.strokeStyle=g('--muted');cx.lineWidth=2;cx.strokeRect(0,0,bw,bh);
+  cx.fillStyle=g('--muted');
+  cx.fillRect(bw,0,PT,bh);
+  cx.fillRect(bw+PT,bh/2-3,CVW-2*PAD-bw-PT,6);
+  for(const p of P){
+    cx.fillStyle=g(COL[p.t]);
+    cx.beginPath();cx.arc(p.x,p.y,RAD[p.t],0,6.283);cx.fill();
+  }
+  cx.restore();
+}
+
+function drawChart(g){
+  const w=CVW,h=CHT,pl=30,pb=6,pt=8,pr=6;
+  cc.clearRect(0,0,w,h);
+  let mx=1;
+  for(const r of hist)for(const v of r)if(v>mx)mx=v;
+  mx*=1.1;
+  cc.strokeStyle=g('--line');cc.lineWidth=1;
+  cc.beginPath();cc.moveTo(pl,pt);cc.lineTo(pl,h-pb);cc.lineTo(w-pr,h-pb);cc.stroke();
+  cc.fillStyle=g('--muted');cc.font='11px system-ui,sans-serif';
+  cc.fillText('0',pl-10,h-pb);cc.fillText(mx.toFixed(1),2,pt+8);
+  if(hist.length<2)return;
+  for(let s=0;s<3;s++){
+    cc.strokeStyle=g(COL[s]);cc.lineWidth=2;cc.beginPath();
+    hist.forEach((r,i)=>{
+      const x=pl+i/(HN-1)*(w-pl-pr),y=h-pb-r[s]/mx*(h-pb-pt);
+      i?cc.lineTo(x,y):cc.moveTo(x,y);
+    });
+    cc.stroke();
+  }
+}
+
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(!paused){
+    step(dt);acc+=dt;
+    if(acc>=.1){acc=0;sample();}
+  }
+  const s=getComputedStyle(document.documentElement),g=k=>s.getPropertyValue(k).trim();
+  drawBox(g);drawChart(g);
+  requestAnimationFrame(loop);
+}
+
+const say=t=>{$('hint').textContent=t};
+$('T').addEventListener('input',e=>{
+  const n=+e.target.value;
+  say(n>T?'Нагрели: реакция экзотермическая, поэтому равновесие смещается влево — NH₃ распадается.'
+         :'Охладили: равновесие смещается вправо — NH₃ больше, но реакция идёт медленнее.');
+  T=n;$('tv').textContent=T+' K';
+});
+$('Pr').addEventListener('input',e=>{
+  const n=+e.target.value;
+  say(n>Pr?'Сжали: было 4 молекулы газа, стало 2. Система снижает давление — NH₃ становится больше.'
+          :'Расширили: равновесие смещается к большему числу молекул — NH₃ распадается.');
+  Pr=n;$('pv').textContent=Pr+' атм';
+});
+$('cat').addEventListener('click',e=>{
+  cat=!cat;e.target.classList.toggle('on',cat);
+  e.target.textContent='Катализатор: '+(cat?'вкл':'выкл');
+  say('Катализатор ускоряет прямую и обратную реакции одинаково: равновесие наступает быстрее, но его положение не меняется.');
+});
+const add=(t,n)=>{if(P.length+n<260)for(let i=0;i<n;i++)spawnRand(t)};
+$('addN').addEventListener('click',()=>{add(0,6);say('Добавили N₂: равновесие смещается вправо, N₂ расходуется и образуется NH₃.')});
+$('addH').addEventListener('click',()=>{add(1,12);say('Добавили H₂: равновесие смещается вправо, H₂ расходуется и образуется NH₃.')});
+$('remA').addEventListener('click',()=>{
+  let k=10;P=P.filter(p=>!(p.t===2&&k-->0));
+  say('Убрали NH₃: равновесие смещается вправо, и аммиак образуется снова. Так работает промышленный синтез.');
+});
+$('pause').addEventListener('click',e=>{paused=!paused;e.target.textContent=paused?'Дальше':'Пауза';e.target.classList.toggle('on',paused)});
+$('rst').addEventListener('click',()=>{reset();say('Начали заново: 20 N₂ и 60 H₂, аммиака пока нет.')});
+window.addEventListener('resize',fit);
+
+fit();reset();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
